@@ -23,8 +23,8 @@ window.addEventListener('resize',resize); resize();
 //  CONSTANTS & DATA
 // ══════════════════════════════════════════════
 const MAX_CUSTOMERS = 3;
-const SPAWN_INTERVAL = 12000; // ms between spawns (slow!)
-const PATIENCE_RATE  = 0.08;  // % per tick (very slow drain)
+const SPAWN_INTERVAL = 12000;
+const PATIENCE_RATE  = 0.08;
 
 const INGREDIENTS = [
   {id:'bread',   label:'BREAD',   icon:'🍞', c:'#D4900F',e:'#8B5A0A'},
@@ -43,7 +43,6 @@ const INGREDIENTS = [
   {id:'spinach', label:'SPINACH', icon:'🌿', c:'#2A6830',e:'#144018'},
 ];
 
-// Customer appearance palettes [skin, hair, shirt, eye, blush]
 const PALETTES = [
   {skin:'#F4C08A',hair:'#3E2723',shirt:'#E53935',eye:'#1A0A00',blush:'#FFAAAA',outline:'#2C1008'},
   {skin:'#FFCCAA',hair:'#F9A825',shirt:'#7B1FA2',eye:'#1A0A00',blush:'#FFBBBB',outline:'#2C1008'},
@@ -62,12 +61,12 @@ let G = {
   score:0, level:1, served:0, missed:0, combo:0, maxCombo:0,
   timer:120, running:false,
   plate:[],
-  customers:[],   // max 3
+  customers:[],
   floats:[],
-  // layout (set each frame)
   hudH:0, topH:0, botH:0, splitY:0,
   slotW:0,
   ingCells:[], plateCX:0, plateCY:0, plateR:0,
+  centerX:0, centerW:0,
   serveBtn:null, clearBtn:null,
   mouse:null,
   raf:null, tInt:null, pInt:null, spawnInt:null,
@@ -78,34 +77,46 @@ let G = {
 // ══════════════════════════════════════════════
 function layout(){
   G.hudH   = Math.max(40, H*0.065);
-  // Top area (customer panels) = 52% of remaining height
-  // Bottom area (workspace) = 48%
   const avail = H - G.hudH;
   G.topH   = avail * 0.52;
   G.botH   = avail * 0.48;
   G.splitY = G.hudH + G.topH;
 
-  // Customer slots: full width split into MAX_CUSTOMERS equal panels
   G.slotW = W / MAX_CUSTOMERS;
 
-  // Ingredient grid: 7 cols × 2 rows, left 68% of bottom area
-  const ingAreaW = W * 0.68;
-  const ingAreaH = G.botH;
-  const cols=7, rows=2;
-  const cw = ingAreaW/cols, ch = ingAreaH/rows;
-  G.ingCells=[];
-  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
-    const idx=r*cols+c;
-    if(idx<INGREDIENTS.length)
-      G.ingCells.push({idx, x:c*cw, y:G.splitY+r*ch, w:cw, h:ch});
+  const leftW  = W * 0.30;
+  const centerW = W * 0.40;
+  const rightX  = leftW + centerW;
+
+  const cols = 2;
+  const rows = Math.ceil(7 / cols); // 4 rows
+  // Make cells square, fitting evenly into the panel
+  const cellSize = Math.min(leftW / cols, G.botH / rows);
+  // Center the grid within each panel
+  const gridW = cellSize * cols;
+  const gridH = cellSize * rows;
+  const leftOffsetX = (leftW - gridW) / 2;
+  const leftOffsetY = G.splitY + (G.botH - gridH) / 2;
+  const rightOffsetX = rightX + (leftW - gridW) / 2;
+
+  G.ingCells = [];
+  for(let i = 0; i < 7; i++){
+    const col = i % cols, row = Math.floor(i / cols);
+    G.ingCells.push({idx: i, x: leftOffsetX + col * cellSize, y: leftOffsetY + row * cellSize, w: cellSize, h: cellSize});
+  }
+  for(let i = 0; i < 7; i++){
+    const idx = 7 + i;
+    if(idx < INGREDIENTS.length){
+      const col = i % cols, row = Math.floor(i / cols);
+      G.ingCells.push({idx, x: rightOffsetX + col * cellSize, y: leftOffsetY + row * cellSize, w: cellSize, h: cellSize});
+    }
   }
 
-  // Plate area: right 32%
-  const paX = ingAreaW;
-  const paW = W - ingAreaW;
-  G.plateCX = paX + paW/2;
-  G.plateCY = G.splitY + G.botH*0.42;
-  G.plateR  = Math.min(paW*0.34, G.botH*0.28);
+  G.centerX = leftW;
+  G.centerW = centerW;
+  G.plateCX = leftW + centerW / 2;
+  G.plateCY = G.splitY + G.botH * 0.42;
+  G.plateR  = Math.min(centerW * 0.36, G.botH * 0.30);
 }
 
 // ══════════════════════════════════════════════
@@ -127,88 +138,25 @@ function rnd(x,y,w,h,r,fill,stroke=null,sw=2){
 }
 
 // ══════════════════════════════════════════════
-//  BACKGROUND (sky + beach scene behind top panels)
+//  BACKGROUND IMAGE
 // ══════════════════════════════════════════════
+const bgImg = new Image();
+bgImg.src = 'background.jpg';
+
 function drawBackground(){
-  const y0=G.hudH, h=G.topH;
-
-  // Sky gradient
-  const sky=CX.createLinearGradient(0,y0,0,y0+h*0.6);
-  sky.addColorStop(0,'#7EC8F0'); sky.addColorStop(1,'#B8DFF5');
-  CX.fillStyle=sky; CX.fillRect(0,y0,W,h*0.6);
-
-  // Ocean
-  const sea=CX.createLinearGradient(0,y0+h*0.35,0,y0+h*0.6);
-  sea.addColorStop(0,'#3090C0'); sea.addColorStop(1,'#2070A8');
-  CX.fillStyle=sea; CX.fillRect(0,y0+h*0.35,W,h*0.35);
-
-  // Waves
-  CX.strokeStyle='rgba(255,255,255,0.4)'; CX.lineWidth=2;
-  for(let wx=0;wx<W;wx+=60){
-    CX.beginPath(); CX.moveTo(wx,y0+h*0.48);
-    CX.quadraticCurveTo(wx+15,y0+h*0.46,wx+30,y0+h*0.48);
-    CX.stroke();
+  if(bgImg.complete && bgImg.naturalWidth>0){
+    const scale = Math.max(W/bgImg.naturalWidth, H/bgImg.naturalHeight);
+    const iw = bgImg.naturalWidth*scale, ih = bgImg.naturalHeight*scale;
+    CX.drawImage(bgImg, (W-iw)/2, (H-ih)/2, iw, ih);
+  } else {
+    CX.fillStyle='#1A1028'; CX.fillRect(0,0,W,H);
   }
-
-  // Sand beach at bottom of bg
-  const sand=CX.createLinearGradient(0,y0+h*0.58,0,y0+h);
-  sand.addColorStop(0,'#E8C878'); sand.addColorStop(1,'#D4B060');
-  CX.fillStyle=sand; CX.fillRect(0,y0+h*0.58,W,h*0.42);
-
-  // Pixel mountains/cliffs left & right
-  drawCliff(0, y0, h, 'left');
-  drawCliff(W, y0, h, 'right');
-
-  // Background dock/pier
-  drawPier(W*0.55, y0+h*0.3, h);
-
-  // Pixel clouds
-  drawCloud(W*0.2, y0+8, 70, 22);
-  drawCloud(W*0.6, y0+14, 90, 26);
-  drawCloud(W*0.85, y0+5, 55, 18);
-}
-
-function drawCliff(x,y,h,side){
-  const w=W*0.18;
-  const pts = side==='left'
-    ? [[0,0],[w*1.2,0],[w*0.9,h*0.4],[w*0.7,h*0.55],[w*0.5,h*0.7],[w*0.3,h*0.85],[0,h]]
-    : [[W,0],[W-w*1.2,0],[W-w*0.9,h*0.4],[W-w*0.7,h*0.55],[W-w*0.5,h*0.7],[W-w*0.3,h*0.85],[W,h]];
-  CX.beginPath(); CX.moveTo(pts[0][0],y+pts[0][1]);
-  pts.forEach(p=>CX.lineTo(p[0],y+p[1]));
-  CX.closePath();
-  const cg=CX.createLinearGradient(0,y,0,y+h);
-  cg.addColorStop(0,'#6A5A8A'); cg.addColorStop(0.5,'#5A4870'); cg.addColorStop(1,'#4A3858');
-  CX.fillStyle=cg; CX.fill();
-  CX.strokeStyle='#3A2848'; CX.lineWidth=2; CX.stroke();
-  // Rock texture dots
-  CX.fillStyle='rgba(255,255,255,0.06)';
-  for(let i=0;i<8;i++) CX.fillRect(
-    (side==='left'?20:W-60)+Math.sin(i*1.7)*30, y+h*0.1+i*h*0.08, 8, 4);
-}
-
-function drawPier(x,y,h){
-  // Wooden dock planks
-  px(x-20,y,140,h*0.5,'#8B6030');
-  for(let pl=0;pl<8;pl++) px(x-18+pl*18,y+2,14,h*0.48,'#A07040');
-  // Railing
-  px(x-22,y,4,h*0.4,'#6B4820'); px(x+118,y,4,h*0.4,'#6B4820');
-  px(x-22,y,144,4,'#7A5228');
-  // Pillars into water
-  for(let pi=0;pi<4;pi++) px(x+pi*38,y+h*0.45,8,h*0.6,'#6B4820');
-}
-
-function drawCloud(x,y,w,h){
-  CX.fillStyle='rgba(255,255,255,0.85)';
-  [[0,h*0.4,w,h],[w*0.15,0,w*0.5,h*0.8],[w*0.5,h*0.2,w*0.45,h*0.7]].forEach(([ox,oy,cw,ch])=>{
-    CX.beginPath(); CX.ellipse(x+ox+cw/2,y+oy+ch/2,cw/2,ch/2,0,0,Math.PI*2); CX.fill();
-  });
 }
 
 // ══════════════════════════════════════════════
 //  CUSTOMER PANELS (top half)
 // ══════════════════════════════════════════════
 function drawTopArea(){
-  // Draw each slot panel
   for(let s=0;s<MAX_CUSTOMERS;s++){
     const slotX = s * G.slotW;
     const cust = G.customers.find(c=>c.slot===s && c.state!=='done');
@@ -217,55 +165,36 @@ function drawTopArea(){
 }
 
 function drawCustomerPanel(x, y, w, h, cust, slotIdx){
-  // Panel background - dark translucent card
   const isEmpty = !cust;
-  const panelBg = isEmpty ? 'rgba(20,10,40,0.55)' : 'rgba(30,15,55,0.82)';
-  const panelBorder = isEmpty ? '#3A2858' : (cust.patience < 30 ? '#E53935' : cust.patience < 60 ? '#FF9800' : '#5A3A8A');
 
-  // Outer glow for active slots
-  if(!isEmpty && cust.state==='at_counter'){
-    CX.shadowColor=panelBorder; CX.shadowBlur=14;
-  }
-  rnd(x+6, y+5, w-12, h-8, 12, panelBg, panelBorder, 3);
-  CX.shadowBlur=0;
-
-  // Slot divider line
-  if(slotIdx>0){ CX.strokeStyle='#2A1848'; CX.lineWidth=3; CX.beginPath(); CX.moveTo(x,y); CX.lineTo(x,y+h); CX.stroke(); }
+  if(slotIdx>0){ CX.strokeStyle='rgba(0,0,0,0.3)'; CX.lineWidth=1; CX.beginPath(); CX.moveTo(x,y); CX.lineTo(x,y+h); CX.stroke(); }
 
   if(isEmpty){
-    // Empty slot indicator
     txt('WAITING...', x+w/2, y+h/2-6, '#3A2858', 7, 'center');
     return;
   }
 
-  // ── Walking-in animation (slide from left edge of panel)
   const custX = x + w/2 + (cust.state==='walking_in' ? cust.slideOffset : 0);
-
-  // ── Draw big pixel bust character
   drawBust(custX, y+h, w, h, cust);
 
-  // ── Order bubble (only when at counter)
   if(cust.state==='at_counter'){
     drawOrderBubble(cust, x, y, w, h);
     drawPatienceBar(cust, x+10, y+h-22, w-20, 10);
   }
 
-  // ── Walking-out: show bag instead
   if(cust.state==='walking_out'){
     drawBagFloat(custX, y+h*0.35, cust);
   }
 }
 
-// ── BIG PIXEL BUST (chest-up, ref-style)
+// ── BIG PIXEL BUST
 function drawBust(cx, footY, panelW, panelH, cust){
   const pal = cust.palette;
-  // Scale character to be roughly 70% of panel height
-  const scale = panelH * 0.68 / 120; // 120 = base height in units
-  const S = scale; // 1 unit = S px
+  const scale = panelH * 0.68 / 120;
+  const S = scale;
 
-  // Animate: bob when at_counter, slide when walking
   const bob = cust.state==='at_counter' ? Math.sin(Date.now()/300+cust.id)*3 : 0;
-  const baseY = footY - 8 + bob; // bottom of character
+  const baseY = footY - 8 + bob;
 
   function b(ux,uy,uw,uh,col,outline=null){
     const px2=~~(cx+(ux-60)*S), py2=~~(baseY+uy*S);
@@ -274,130 +203,100 @@ function drawBust(cx, footY, panelW, panelH, cust){
     if(outline){ CX.strokeStyle=outline; CX.lineWidth=Math.max(1,~~(S*0.8)); CX.strokeRect(px2,py2,pw2,ph2); }
   }
 
-  const OL = pal.outline; // outline color
+  const OL = pal.outline;
 
-  // ── BODY (shirt) — chest/torso visible from bottom of panel
   b(22,-80,36,50,pal.shirt,OL);
-  // Shirt collar
   b(34,-82,12,8,pal.skin,OL);
-  // Shirt shading
   b(22,-80,5,50,'rgba(0,0,0,0.15)');
   b(53,-80,5,50,'rgba(0,0,0,0.1)');
-  // Shirt detail (pocket / buttons)
   b(42,-70,6,10,'rgba(255,255,255,0.15)');
   b(38,-66,4,3,'rgba(255,255,255,0.2)');
   b(38,-59,4,3,'rgba(255,255,255,0.2)');
 
-  // ── NECK
   b(36,-90,8,12,pal.skin,OL);
 
-  // ── HEAD (big, chibi proportions)
   b(18,-148,44,60,pal.skin,OL);
-  // Head shading sides
   b(18,-148,5,60,'rgba(0,0,0,0.1)');
   b(57,-148,5,60,'rgba(0,0,0,0.1)');
-  // Head top rounding (inner dark)
   b(18,-148,44,4,'rgba(0,0,0,0.07)');
 
-  // ── EARS
   b(14,-130,6,14,pal.skin,OL);
   b(60,-130,6,14,pal.skin,OL);
 
-  // ── HAIR (different styles)
   const hairStyle = cust.hairStyle;
-  if(hairStyle===0){ // short swept
+  if(hairStyle===0){
     b(16,-158,48,18,pal.hair,OL);
     b(18,-152,12,8,pal.hair);
     b(52,-152,10,8,pal.hair);
-    b(16,-148,6,8,pal.hair); // sideburn
+    b(16,-148,6,8,pal.hair);
     b(58,-148,6,8,pal.hair);
-  } else if(hairStyle===1){ // medium with part
+  } else if(hairStyle===1){
     b(14,-162,52,22,pal.hair,OL);
     b(14,-148,8,20,pal.hair);
     b(58,-148,8,20,pal.hair);
-    b(37,-163,6,5,'rgba(255,255,255,0.2)'); // part shine
-  } else if(hairStyle===2){ // wild spiky
+    b(37,-163,6,5,'rgba(255,255,255,0.2)');
+  } else if(hairStyle===2){
     b(16,-168,48,28,pal.hair,OL);
     b(12,-164,6,14,pal.hair,OL);
     b(62,-164,6,14,pal.hair,OL);
     b(22,-172,8,10,pal.hair,OL);
     b(38,-175,10,12,pal.hair,OL);
     b(50,-170,8,10,pal.hair,OL);
-  } else if(hairStyle===3){ // bun / updo
+  } else if(hairStyle===3){
     b(16,-158,48,16,pal.hair,OL);
     b(14,-148,6,16,pal.hair,OL);
     b(60,-148,6,16,pal.hair,OL);
-    b(30,-170,20,18,pal.hair,OL); // bun
+    b(30,-170,20,18,pal.hair,OL);
     rnd(~~(cx+(30-60)*S),~~(baseY-170*S),~~(20*S),~~(18*S),~~(4*S),pal.hair,OL,1);
-  } else { // hat
+  } else {
     b(16,-158,48,12,pal.hair,OL);
-    b(10,-168,60,12,pal.hair,OL); // brim
-    b(20,-188,40,24,pal.hair,OL); // hat top
-    b(30,-189,20,4,'rgba(255,255,255,0.15)'); // band
+    b(10,-168,60,12,pal.hair,OL);
+    b(20,-188,40,24,pal.hair,OL);
+    b(30,-189,20,4,'rgba(255,255,255,0.15)');
   }
 
-  // ── EYES (expressive)
   const eyeY = -118;
-  // Eye whites
   b(24,eyeY,14,12,'#FFFFFF');
   b(42,eyeY,14,12,'#FFFFFF');
-  // Irises
   b(27,eyeY+2,8,8,pal.eye==='#1A4080'?'#2060B0':'#3A2010');
   b(45,eyeY+2,8,8,pal.eye==='#1A4080'?'#2060B0':'#3A2010');
-  // Pupils
   b(29,eyeY+3,5,6,'#080808');
   b(47,eyeY+3,5,6,'#080808');
-  // Eye shine
   b(30,eyeY+3,2,2,'rgba(255,255,255,0.9)');
   b(48,eyeY+3,2,2,'rgba(255,255,255,0.9)');
-  // Eyelashes top
   b(24,eyeY,14,3,pal.hair);
   b(42,eyeY,14,3,pal.hair);
-  // Eyebrows
   const browY = cust.patience>50 ? eyeY-8 : eyeY-6;
   const browTilt = cust.patience<30 ? 2 : 0;
   b(24,browY-browTilt,14,4,pal.hair);
   b(42,browY+browTilt,14,4,pal.hair);
 
-  // ── NOSE
-  b(37,-105,6,6,pal.skin.replace('#','').length===6 ? shadeColor(pal.skin,-20) : '#C49060');
+  b(37,-105,6,6,shadeColor(pal.skin,-20));
 
-  // ── MOUTH (expression based on patience)
   const mouthY = -92;
   if(cust.state==='walking_out'){
-    // Happy face / big smile
     b(28,mouthY,24,6,'#C04050');
-    b(30,mouthY+2,20,4,'#FF6070'); // inner
-    b(28,mouthY,4,4,pal.skin); b(48,mouthY,4,4,pal.skin); // corners
-    // teeth
+    b(30,mouthY+2,20,4,'#FF6070');
+    b(28,mouthY,4,4,pal.skin); b(48,mouthY,4,4,pal.skin);
     b(30,mouthY,4,4,'#FFFFFF'); b(35,mouthY,4,4,'#FFFFFF'); b(40,mouthY,4,4,'#FFFFFF'); b(45,mouthY,4,4,'#FFFFFF');
   } else if(cust.patience>65){
-    // Smile
     b(28,mouthY,24,5,'#C04050');
     b(30,mouthY+1,20,4,'#E06070');
     b(28,mouthY+2,3,3,pal.skin); b(49,mouthY+2,3,3,pal.skin);
   } else if(cust.patience>30){
-    // Neutral/annoyed
     b(28,mouthY+2,24,4,'#A03040');
     b(28,mouthY+2,3,4,pal.skin); b(49,mouthY+2,3,4,pal.skin);
   } else {
-    // Frown / angry
     b(28,mouthY+4,24,4,'#901828');
     b(28,mouthY+2,4,4,pal.skin); b(48,mouthY+2,4,4,pal.skin);
-    // Anger veins
     b(16,-138,3,8,'#E53935'); b(62,-138,3,8,'#E53935');
     b(14,-140,8,3,'#E53935'); b(58,-140,8,3,'#E53935');
-    // Sweat drop
     CX.fillStyle='#64B5F6';
     CX.beginPath(); CX.arc(~~(cx+28*S),~~(baseY-155*S),~~(3*S),0,Math.PI*2); CX.fill();
   }
 
-  // ── BLUSH
-  b(16,-108,12,8,pal.blush.replace('#','').length===6?pal.blush+'44':'rgba(255,160,140,0.28)');
-  b(52,-108,12,8,pal.blush.replace('#','').length===6?pal.blush+'44':'rgba(255,160,140,0.28)');
-
-  // Clip character to panel by drawing counter ledge over bottom
-  // (handled by counter draw order)
+  b(16,-108,12,8,pal.blush+'44');
+  b(52,-108,12,8,pal.blush+'44');
 }
 
 function shadeColor(hex,amt){
@@ -408,7 +307,7 @@ function shadeColor(hex,amt){
   return `#${((1<<24)+(r<<16)+(g<<8)+b2).toString(16).slice(1)}`;
 }
 
-// ── ORDER BUBBLE (top-right of panel)
+// ── ORDER BUBBLE
 function drawOrderBubble(cust,x,y,w,h){
   const order = cust.order;
   const iSz = Math.min(22, w*0.08);
@@ -418,11 +317,9 @@ function drawOrderBubble(cust,x,y,w,h){
   const bx = x+w/2-bw/2;
   const by = y+12;
 
-  // Shadow
   CX.fillStyle='rgba(0,0,0,0.3)';
   CX.beginPath(); bblPath(CX,bx+2,by+2,bw,bh,x+w/2,8); CX.fill();
 
-  // Bubble
   const urgentPulse = cust.patience<30 ? 0.5+0.5*Math.sin(Date.now()/150) : 1;
   CX.fillStyle=`rgba(255,253,231,${urgentPulse})`;
   CX.beginPath(); bblPath(CX,bx,by,bw,bh,x+w/2,8); CX.fill();
@@ -451,7 +348,6 @@ function drawPatienceBar(cust,x,y,w,h){
   const c=pct>0.6?'#4CAF50':pct>0.3?'#FF9800':'#E53935';
   CX.fillStyle=c; CX.fillRect(x,y,w*pct,h);
   CX.strokeStyle='rgba(255,255,255,0.2)'; CX.lineWidth=1; CX.strokeRect(x,y,w,h);
-  // Segments
   for(let s=1;s<5;s++){
     CX.strokeStyle='rgba(0,0,0,0.3)'; CX.lineWidth=1;
     CX.beginPath(); CX.moveTo(x+w*s/5,y); CX.lineTo(x+w*s/5,y+h); CX.stroke();
@@ -469,41 +365,40 @@ function drawBagFloat(cx,y,cust){
 }
 
 // ══════════════════════════════════════════════
-//  COUNTER LEDGE (the divider between top/bottom)
+//  COUNTER LEDGE
 // ══════════════════════════════════════════════
 function drawCounterLedge(){
   const ly = G.splitY;
-  // Thick counter surface
-  const cg=CX.createLinearGradient(0,ly-4,0,ly+28);
-  cg.addColorStop(0,'#C07030'); cg.addColorStop(0.3,'#B06828'); cg.addColorStop(1,'#7A3E10');
-  CX.fillStyle=cg; CX.fillRect(0,ly-4,W,32);
-  px(0,ly-6,W,4,'rgba(255,255,255,0.22)');
-  px(0,ly-4,W,3,'#E09040');
-  px(0,ly+26,W,4,'#5A2800');
-  px(0,ly+28,W,3,'#3A1600');
-  // Wood grain
-  CX.strokeStyle='rgba(0,0,0,0.06)'; CX.lineWidth=1;
-  for(let g=0;g<32;g+=5){ CX.beginPath(); CX.moveTo(0,ly+g); CX.lineTo(W,ly+g+1); CX.stroke(); }
-  // Slot dividers on counter top
-  for(let s=1;s<MAX_CUSTOMERS;s++){
-    const sx=s*G.slotW;
-    px(sx-2,ly-4,4,36,'rgba(0,0,0,0.25)');
-  }
+  CX.fillStyle='rgba(0,0,0,0.55)';
+  CX.fillRect(0, ly-2, W, 6);
+  CX.fillStyle='rgba(255,255,255,0.08)';
+  CX.fillRect(0, ly-2, W, 2);
 }
 
 // ══════════════════════════════════════════════
 //  BOTTOM WORKSPACE
 // ══════════════════════════════════════════════
 function drawWorkspace(){
-  const y=G.splitY+30, h=G.botH-30;
-  // Dark green counter surface (like the reference)
-  const wg=CX.createLinearGradient(0,y,0,y+h);
-  wg.addColorStop(0,'#2A4A30'); wg.addColorStop(1,'#1A3020');
-  CX.fillStyle=wg; CX.fillRect(0,y-2,W,h+4);
-  // Grid lines on surface
-  CX.strokeStyle='rgba(255,255,255,0.04)'; CX.lineWidth=1;
-  for(let gx=0;gx<W;gx+=40){ CX.beginPath(); CX.moveTo(gx,y); CX.lineTo(gx,y+h); CX.stroke(); }
-  for(let gy=y;gy<y+h;gy+=40){ CX.beginPath(); CX.moveTo(0,gy); CX.lineTo(W,gy); CX.stroke(); }
+  const lw=W*0.30, cw=W*0.40, rx=W*0.70;
+  const y=G.splitY+4, h=G.botH-4;
+
+  CX.fillStyle='rgba(10,8,20,0.62)';
+  CX.fillRect(0, y, lw, h);
+  CX.fillStyle='rgba(10,8,20,0.62)';
+  CX.fillRect(rx, y, lw, h);
+  CX.fillStyle='rgba(20,15,35,0.55)';
+  CX.fillRect(lw, y, cw, h);
+
+  CX.strokeStyle='rgba(180,150,255,0.15)';
+  CX.lineWidth=1.5;
+  CX.strokeRect(lw+2, y+2, cw-4, h-4);
+
+  CX.fillStyle='rgba(0,0,0,0.5)';
+  CX.fillRect(lw-3, y, 6, h);
+  CX.fillRect(rx-3, y, 6, h);
+  CX.fillStyle='rgba(255,255,255,0.06)';
+  CX.fillRect(lw, y, 1, h);
+  CX.fillRect(rx, y, 1, h);
 
   drawIngredientArea();
   drawPlateArea();
@@ -511,51 +406,30 @@ function drawWorkspace(){
 
 function drawIngredientArea(){
   G.ingCells.forEach(cell=>drawIngCell(cell));
-
-  // Section label
-  const lx=0, ly=G.splitY+32;
-  txt('INGREDIENTS',12,ly,'rgba(255,215,0,0.5)',6);
+  txt('INGREDIENTS', W*0.15, G.splitY+8, 'rgba(255,215,0,0.6)', 6, 'center');
+  txt('INGREDIENTS', W*0.85, G.splitY+8, 'rgba(255,215,0,0.6)', 6, 'center');
 }
 
 function drawIngCell(cell){
   const ing=INGREDIENTS[cell.idx];
   const m=G.mouse;
-  const hover=m && m.x>=cell.x&&m.x<cell.x+cell.w&&m.y>=cell.y&&m.y<cell.y+cell.h;
-
-  // Cell background (cutting board style)
-  const bg = hover ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.28)';
-  const border = hover ? '#FFD700' : 'rgba(255,255,255,0.08)';
-  rnd(cell.x+3,cell.y+4,cell.w-6,cell.h-8,5,bg,border,hover?2:1);
-
-  // Small board/tile behind icon
-  const bx=cell.x+cell.w/2-20, by=cell.y+6, bw=40, bh=cell.h-24;
-  rnd(bx,by,bw,bh,3,'rgba(100,60,20,0.5)','rgba(80,40,10,0.4)',1);
-
-  // Ingredient icon
-  const iSz=Math.min(cell.h*0.48,32);
+  const hover=m&&m.x>=cell.x&&m.x<cell.x+cell.w&&m.y>=cell.y&&m.y<cell.y+cell.h;
+  const bg=hover?'rgba(255,255,255,0.18)':'rgba(0,0,0,0.30)';
+  const border=hover?'#FFD700':'rgba(255,255,255,0.10)';
+  rnd(cell.x+3,cell.y+3,cell.w-6,cell.h-6,5,bg,border,hover?2:1);
+  const iSz=Math.min(cell.h*0.46,30);
   CX.font=`${iSz}px serif`;
   CX.textAlign='center'; CX.textBaseline='middle';
-  CX.fillText(ing.icon, cell.x+cell.w/2, cell.y+cell.h*0.42);
-
-  // Label
+  CX.fillText(ing.icon, cell.x+cell.w/2, cell.y+cell.h*0.40);
   const lblSz=Math.max(4,Math.min(6,cell.w/12));
   txt(ing.label, cell.x+cell.w/2, cell.y+cell.h-14, hover?'#FFD700':'#C8A870', lblSz, 'center');
-
-  if(hover){
-    CX.fillStyle='rgba(255,215,0,0.07)';
-    CX.fillRect(cell.x+3,cell.y+4,cell.w-6,cell.h-8);
-  }
+  if(hover){ CX.fillStyle='rgba(255,215,0,0.07)'; CX.fillRect(cell.x+3,cell.y+3,cell.w-6,cell.h-6); }
 }
 
 function drawPlateArea(){
-  const px2=W*0.68, pw=W*0.32, cY=G.splitY+30;
   const cx2=G.plateCX, cy=G.plateCY, r=G.plateR;
-
-  // Area bg highlight
-  rnd(px2+4,cY+4,pw-8,G.botH-38,6,'rgba(0,0,0,0.25)','rgba(255,255,255,0.05)',1);
+  const cY=G.splitY+6, cW=G.centerW;
   txt('YOUR PLATE',cx2,cY+8,'#FFD700',6,'center');
-
-  // Plate shadow + body
   CX.fillStyle='rgba(0,0,0,0.22)'; CX.beginPath(); CX.ellipse(cx2+4,cy+6,r+4,r*0.36,0,0,Math.PI*2); CX.fill();
   const pg=CX.createRadialGradient(cx2-r*0.2,cy-r*0.12,2,cx2,cy,r);
   pg.addColorStop(0,'#F8F4EC'); pg.addColorStop(0.7,'#EEE8DC'); pg.addColorStop(1,'#C8C0B0');
@@ -563,29 +437,23 @@ function drawPlateArea(){
   CX.strokeStyle='#A09080'; CX.lineWidth=2; CX.stroke();
   CX.strokeStyle='rgba(255,255,255,0.4)'; CX.lineWidth=1.5;
   CX.beginPath(); CX.ellipse(cx2-4,cy-3,r*0.65,r*0.2,-0.2,Math.PI*1.1,Math.PI*1.95); CX.stroke();
-
   if(G.plate.length===0){
     txt('EMPTY',cx2,cy-8,'#9A7850',7,'center');
-    txt('↓ CLICK BELOW',cx2,cy+6,'#786040',5,'center');
+    txt('CLICK SIDES',cx2,cy+6,'#786040',5,'center');
   } else {
     drawSandwich(cx2,cy,r);
   }
-
-  // SERVE button
-  const btnW=pw*0.68, btnH=30;
-  const btnX=cx2-btnW/2, btnY=cY+G.botH-btnH-16;
+  const btnW=cW*0.55, btnH=30;
+  const btnX=cx2-btnW/2, btnY=cY+G.botH-btnH-14;
   const hovSrv=G.mouse&&G.mouse.x>=btnX&&G.mouse.x<=btnX+btnW&&G.mouse.y>=btnY&&G.mouse.y<=btnY+btnH;
   rnd(btnX,btnY,btnW,btnH,5,hovSrv?'#22AA22':'#1A8A1A','#0A5A0A',2);
   if(hovSrv){CX.fillStyle='rgba(255,255,255,0.08)';CX.fillRect(btnX+2,btnY+2,btnW-4,btnH-4);}
   txt('▶  SERVE!',cx2,btnY+9,'#FFFFFF',8,'center');
-
-  // CLEAR button
-  const clrW=pw*0.56, clrH=20;
+  const clrW=cW*0.44, clrH=20;
   const clrX=cx2-clrW/2, clrY=btnY-clrH-6;
   const hovClr=G.mouse&&G.mouse.x>=clrX&&G.mouse.x<=clrX+clrW&&G.mouse.y>=clrY&&G.mouse.y<=clrY+clrH;
   rnd(clrX,clrY,clrW,clrH,4,hovClr?'#6A2A10':'#4A1A08','#2A0A04',1);
   txt('✕  CLEAR',cx2,clrY+5,'#C8A888',6,'center');
-
   G.serveBtn={x:btnX,y:btnY,w:btnW,h:btnH};
   G.clearBtn={x:clrX,y:clrY,w:clrW,h:clrH};
 }
@@ -632,27 +500,22 @@ function rr(x,y,w,h,r){const[tl,tr,br,bl]=r;CX.beginPath();CX.moveTo(x+tl,y);CX.
 // ══════════════════════════════════════════════
 function drawHUD(){
   const h=G.hudH;
-  // Dark bar
-  CX.fillStyle='rgba(10,5,20,0.95)'; CX.fillRect(0,0,W,h);
+  CX.fillStyle='rgba(8,4,18,0.88)'; CX.fillRect(0,0,W,h);
   px(0,h-3,W,3,'#FFD700'); px(0,h-5,W,2,'#A08000');
 
-  // Score
   rnd(8,5,120,h-10,4,'rgba(20,10,40,0.9)','#FFD700',2);
   txt('⭐',16,12,'#FFD700',14);
   txt(String(G.score),40,13,'#FFD700',11);
 
-  // Timer (center)
   const tCol=G.timer<=15?'#E53935':'#FFFFFF';
   rnd(W/2-65,4,130,h-8,5,'rgba(20,10,40,0.9)','#666',1);
   txt(`⏱ ${G.timer}s`,W/2,12,tCol,10,'center');
 
-  // Combo
   if(G.combo>1){
     rnd(138,5,130,h-10,4,'rgba(80,20,0,0.9)','#FF6B35',2);
     txt(`${G.combo}✕ COMBO`,203,12,'#FF9800',7,'center');
   }
 
-  // Right stats
   rnd(W-230,5,222,h-10,4,'rgba(20,10,40,0.9)','#444',1);
   txt(`LV ${G.level}`,W-218,13,'#4CAF50',8);
   txt(`✓ ${G.served}`,W-164,13,'#64B5F6',8);
@@ -711,10 +574,11 @@ function frame(){
 //  CUSTOMER LOGIC
 // ══════════════════════════════════════════════
 function genOrder(){
-  const n=2+Math.floor(Math.random()*(1+G.level));
-  const fill=[...INGREDIENTS].filter(i=>i.id!=='bread').sort(()=>Math.random()-.5).slice(0,n-2);
-  const br=INGREDIENTS.find(i=>i.id==='bread');
-  return[br,...fill,br];
+  const n = Math.max(3, 2 + Math.floor(Math.random() * (1 + G.level)));
+  const fillingsPool = [...INGREDIENTS].filter(i => i.id !== 'bread');
+  const fill = fillingsPool.sort(() => Math.random() - .5).slice(0, n - 2);
+  const br = INGREDIENTS.find(i => i.id === 'bread');
+  return [br, ...fill, br];
 }
 
 function spawnCustomer(){
@@ -736,7 +600,7 @@ function spawnCustomer(){
     patienceRate:PATIENCE_RATE+(G.level-1)*0.02,
     slot,
     state:'walking_in',
-    slideOffset: -G.slotW*0.7, // starts off to left of panel
+    slideOffset: -G.slotW*0.7,
   });
 }
 
@@ -776,31 +640,49 @@ function getTargetCustomer(){
   return at.sort((a,b)=>a.slot-b.slot)[0];
 }
 
-function serve(){
-  if(!G.plate.length){ addFloat('ADD INGREDIENTS!',W/2,G.splitY-40,'#FF9800'); return; }
-  const c=getTargetCustomer();
-  if(!c){ addFloat('NO CUSTOMERS!',W/2,G.splitY-40,'#FF9800'); return; }
-  const res=scoreOrder(G.plate,c.order);
-  if(res.perfect){
-    const bonus=Math.max(0,Math.floor(c.patience/100*50));
-    G.combo++; if(G.combo>G.maxCombo) G.maxCombo=G.combo;
-    const cbonus=G.combo>1?G.combo*20:0;
-    const pts=100+bonus+cbonus+(G.level-1)*20;
-    G.score+=pts; G.served++;
-    addFloat(`PERFECT! +${pts}`,c.slot*G.slotW+G.slotW/2,G.hudH+G.topH*0.25,'#FFD700');
-    if(G.combo>1) addFloat(`${G.combo}x COMBO!`,c.slot*G.slotW+G.slotW/2,G.hudH+G.topH*0.1,'#FF6B35');
-    c.state='walking_out'; c.slideOffset=0;
-  } else if(res.score>0){
-    G.combo=1;
-    const pts=res.score*10; G.score+=pts; G.served++;
-    addFloat(`OK! +${pts}`,c.slot*G.slotW+G.slotW/2,G.hudH+G.topH*0.25,'#4CAF50');
-    c.state='walking_out'; c.slideOffset=0;
-  } else {
-    G.combo=0; G.score=Math.max(0,G.score-20);
-    addFloat('WRONG ORDER! -20',c.slot*G.slotW+G.slotW/2,G.hudH+G.topH*0.25,'#E53935');
+function serve() {
+  // 1. Check if the plate is actually empty
+  if (!G.plate.length) { 
+    addFloat('ADD INGREDIENTS!', G.plateCX, G.plateCY - 40, '#FF9800'); 
+    return; 
   }
-  G.plate=[];
-  G.level=1+Math.floor(G.served/5);
+
+  const c = getTargetCustomer();
+  if (!c) { 
+    addFloat('NO CUSTOMERS!', W / 2, G.splitY - 40, '#FF9800'); 
+    return; 
+  }
+
+  const res = scoreOrder(G.plate, c.order);
+
+  // 2. ONLY accept the order if it is PERFECT
+  if (res.perfect) {
+    const bonus = Math.max(0, Math.floor(c.patience / 100 * 50));
+    G.combo++; 
+    if (G.combo > G.maxCombo) G.maxCombo = G.combo;
+    
+    const cbonus = G.combo > 1 ? G.combo * 20 : 0;
+    const pts = 100 + bonus + cbonus + (G.level - 1) * 20;
+    
+    G.score += pts; 
+    G.served++;
+    
+    addFloat(`PERFECT! +${pts}`, c.slot * G.slotW + G.slotW / 2, G.hudH + G.topH * 0.25, '#FFD700');
+    if (G.combo > 1) addFloat(`${G.combo}x COMBO!`, c.slot * G.slotW + G.slotW / 2, G.hudH + G.topH * 0.1, '#FF6B35');
+    
+    c.state = 'walking_out'; 
+    c.slideOffset = 0;
+    G.plate = []; // Clear plate only on success
+  } 
+  // 3. If it's not perfect, penalize the player and keep the ingredients on the plate
+  else {
+    G.combo = 0; 
+    G.score = Math.max(0, G.score - 20);
+    addFloat('WRONG ORDER! -20', c.slot * G.slotW + G.slotW / 2, G.hudH + G.topH * 0.25, '#E53935');
+    // We do NOT clear the plate here so the player can fix their mistake
+  }
+
+  G.level = 1 + Math.floor(G.served / 5);
 }
 
 function scoreOrder(plate,order){
@@ -828,13 +710,10 @@ CV.addEventListener('click',e=>{
     return;
   }
 
-  // Serve
   if(G.serveBtn&&mx>=G.serveBtn.x&&mx<=G.serveBtn.x+G.serveBtn.w&&my>=G.serveBtn.y&&my<=G.serveBtn.y+G.serveBtn.h){ serve(); return; }
-  // Clear
   if(G.clearBtn&&mx>=G.clearBtn.x&&mx<=G.clearBtn.x+G.clearBtn.w&&my>=G.clearBtn.y&&my<=G.clearBtn.y+G.clearBtn.h){
     G.plate=[]; addFloat('CLEARED',G.plateCX,G.plateCY-20,'#888'); return;
   }
-  // Ingredients
   for(const cell of G.ingCells){
     if(mx>=cell.x&&mx<cell.x+cell.w&&my>=cell.y&&my<cell.y+cell.h){
       G.plate.push(INGREDIENTS[cell.idx]);
@@ -842,7 +721,6 @@ CV.addEventListener('click',e=>{
       return;
     }
   }
-  // Click plate = remove top
   const d=Math.sqrt((mx-G.plateCX)**2+((my-G.plateCY)/0.34)**2);
   if(d<G.plateR+16&&G.plate.length>0){
     const rm=G.plate.pop();
@@ -864,13 +742,11 @@ function startGame(){
   clearInterval(G.tInt); clearInterval(G.pInt); clearInterval(G.spawnInt); clearInterval(G.custUpdateInt);
   Object.assign(G,{score:0,level:1,served:0,missed:0,combo:0,maxCombo:0,timer:120,running:true,plate:[],customers:[],floats:[],_restart:null});
 
-  // First customer immediately
   spawnCustomer();
 
   G.tInt=setInterval(()=>{ if(!G.running) return; G.timer--; if(G.timer<=0) endGame(); },1000);
   G.pInt=setInterval(()=>{ if(G.running){ tickPatience(); G.level=1+Math.floor(G.served/5); } },600);
   G.custUpdateInt=setInterval(()=>{ if(G.running) updateCustomers(); },16);
-  // Slow spawn rate — one customer every ~12s, max 3 at a time
   G.spawnInt=setInterval(()=>{ if(G.running) spawnCustomer(); },SPAWN_INTERVAL);
 
   if(!G.raf) G.raf=requestAnimationFrame(frame);
@@ -879,6 +755,7 @@ function startGame(){
 function endGame(){
   G.running=false;
   clearInterval(G.tInt); clearInterval(G.pInt); clearInterval(G.spawnInt); clearInterval(G.custUpdateInt);
+  cancelAnimationFrame(G.raf); G.raf=null;
 }
 
 startGame();
