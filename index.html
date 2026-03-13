@@ -57,12 +57,18 @@ const bgMusic = new Audio('audio.m4a');
 bgMusic.loop = true;
 bgMusic.volume = 0.6;
  
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+const track = audioCtx.createMediaElementSource(bgMusic);
+track.connect(audioCtx.destination);
+ 
 let musicStarted = false;
 function tryStartMusic() {
   if (!musicStarted) {
-    bgMusic.play().then(() => {
-      musicStarted = true;
-    }).catch(err => console.warn('Audio failed:', err));
+    audioCtx.resume().then(() => {
+      bgMusic.play().then(() => {
+        musicStarted = true;
+      }).catch(err => console.warn('Audio failed:', err));
+    });
   }
 }
  
@@ -341,3 +347,4 @@ startGame();
 </script>
 </body>
 </html>
+ 
