@@ -2,7 +2,7 @@
 
 > *A game about consecutive customers, built on consecutive octaves.*
 
-Play it here → **[GitHub Pages Link]()**
+Play it here → **[GitHub Pages Link](https://pt1011.github.io/Consecutive_Game_Jam/)**
 
 ---
 
