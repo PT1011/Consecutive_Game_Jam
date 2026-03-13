@@ -64,11 +64,15 @@ track.connect(audioCtx.destination);
 let musicStarted = false;
 function tryStartMusic() {
   if (!musicStarted) {
+    console.log('1. tryStartMusic called');
+    console.log('2. AudioContext state:', audioCtx.state);
     audioCtx.resume().then(() => {
+      console.log('3. AudioContext resumed, state now:', audioCtx.state);
       bgMusic.play().then(() => {
         musicStarted = true;
-      }).catch(err => console.warn('Audio failed:', err));
-    });
+        console.log('4. Music playing!');
+      }).catch(err => console.warn('4. bgMusic.play() failed:', err));
+    }).catch(err => console.warn('3. audioCtx.resume() failed:', err));
   }
 }
  
